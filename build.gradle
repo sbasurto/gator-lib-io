@@ -1,0 +1,35 @@
+plugins { id 'java-library' }
+
+group = 'gator.lib'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    withSourcesJar()
+}
+
+sourceSets.main.java.srcDir 'src'
+sourceSets.test.java.srcDir 'test'
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+
+repositories { mavenCentral() }
+
+dependencies {
+    api 'gator.lib:gator-lib:1.0.0-SNAPSHOT'
+}
+
+tasks.named('jar') {
+    archiveFileName = 'gator-lib-io.jar'
+    destinationDirectory = file('dist')
+}
+
+tasks.register('selfTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'gator.lib.io.external.GatorAdmonTablasSelfCheck'
+    enableAssertions = true
+}
+
+tasks.named('test') { failOnNoDiscoveredTests = false }
+tasks.named('check') { dependsOn selfTest }
+tasks.named('clean') { delete 'dist' }

@@ -1,0 +1,4 @@
+rootProject.name = 'gator-lib-io'
+
+def gatorLibDir = providers.gradleProperty('gatorLibDir').getOrElse('../gator-lib')
+if (file(gatorLibDir).isDirectory()) { includeBuild(gatorLibDir) }

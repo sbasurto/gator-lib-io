@@ -1,0 +1,8 @@
+.gradle/
+build/
+dist/
+nbproject/private/
+conf/
+spool/
+*.class
+*.swp
