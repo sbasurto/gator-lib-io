@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import gator.lib.io.external.data.GatorFileInfo;
 
 public final class GatorAdmonTablasSelfCheck {
     public static void main(String[] args) {
@@ -22,7 +23,24 @@ public final class GatorAdmonTablasSelfCheck {
         assert csv.get(2).get(1).equals("x\"y");
         assert csv.get(2).get(2).isEmpty();
 
+        GatorFileInfo generatorInfo = new GatorFileInfo();
+        generatorInfo.setConfFile("db");
+        generatorInfo.setAccount("1");
+        generatorInfo.setWarehouse("1");
+        generatorInfo.setUser("user");
+        generatorInfo.setIdctrl("control");
+        generatorInfo.setSessionId("session");
+        assert GatorFileImportProcessor.requireFileInfo(generatorInfo, false) == generatorInfo;
+
         boolean rejected = false;
+        try {
+            GatorFileImportProcessor.requireFileInfo(generatorInfo, true);
+        } catch (IllegalArgumentException expected) {
+            rejected = true;
+        }
+        assert rejected;
+
+        rejected = false;
         try {
             GatorFileImportProcessor.requireProcedure("safe;drop", "procedimiento");
         } catch (IllegalArgumentException expected) {

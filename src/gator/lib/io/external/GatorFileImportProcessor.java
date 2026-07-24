@@ -133,7 +133,7 @@ public class GatorFileImportProcessor {
                 gappLog.startNewLog("GatorFileImportProcessor", "Default");
                 gappLog.setName("constructor-default");
                 gappLog.setFileToLog("import");
-                gatorFileInfo = requireFileInfo(fileInfo);
+                gatorFileInfo = requireFileInfo(fileInfo, true);
                 gappLogger.logIt(gappLog);
                 gappLog.addMessage("with file name", 1);
                 dbhelper = new GappDBHelper(gatorFileInfo.getConfFile());                
@@ -172,7 +172,8 @@ public class GatorFileImportProcessor {
         public GatorFileImportProcessor(GatorFileInfo fileInfo, boolean isSecond) {
                 gappLog.startNewLog("GatorFileImportProcessor", "GatorFileImportProcessor");
                 gappLog.setName("fileinfo-issecond");
-                gatorFileInfo = requireFileInfo(fileInfo);
+                gappLog.setFileToLog("import");
+                gatorFileInfo = requireFileInfo(fileInfo, false);
                 gappLogger.logIt("GatorFileImportProcessor", "","import", "system", 0);                
                 gappLog.addMessage("Just config", 1);
                 dbhelper = new GappDBHelper(gatorFileInfo.getConfFile());
@@ -304,10 +305,7 @@ public class GatorFileImportProcessor {
                 jsonObj.addProperty("idctrl",  gatorFileInfo.getIdctrl());
                 JsonArray jsonArray = gson.toJsonTree(fileHeaders).getAsJsonArray();
                 jsonObj.add("headers", jsonArray);
-                GappSQLStatement gappSQLStmt = new GappSQLStatement();
-                gappSQLStmt.setStoreProcedure("app_fn_get_proceso2");
-                gappSQLStmt.addParam(gson.toJson(jsonObj));                
-                String jsonProcess = dbhelper.executeStore(gappSQLStmt);
+                String jsonProcess = executeStore(dbhelper, "app_fn_get_proceso2", gson.toJson(jsonObj));
                 status = jsonProcess;
                 responses = parseResponses(jsonProcess, "app_fn_get_proceso2");
                 GappResponse response = firstResponse(responses, "app_fn_get_proceso2");
@@ -358,10 +356,7 @@ public class GatorFileImportProcessor {
                 jsonObj.add("columnas", colsAsJsonArr);
                 JsonArray jsonArrayAsHM = gson.toJsonTree(processLinesAsHashMap).getAsJsonArray();                
                 jsonObj.add("registrosArray", jsonArrayAsHM);
-                GappSQLStatement gappSQLStmt = new GappSQLStatement();
-                gappSQLStmt.setStoreProcedure(procedure);
-                gappSQLStmt.addParam(gson.toJson(jsonObj));                
-                String jsonProcess = dbhelper.executeStore(gappSQLStmt);
+                String jsonProcess = executeStore(dbhelper, procedure, gson.toJson(jsonObj));
                 responses = parseResponses(jsonProcess, procedure);
                 status = jsonProcess;
                 gappLog.addMessage("Verifying lines done.", 0);
@@ -463,10 +458,8 @@ public class GatorFileImportProcessor {
                 gappLogger.logIt(gappLog);                
 		}
         private String executeImport(String param) {
-                GappSQLStatement gappSQLStmt = new GappSQLStatement();
-                gappSQLStmt.setStoreProcedure("app_fn_add_import");
-                gappSQLStmt.addParam(param);
-                return new GappDBHelper(gatorFileInfo.getConfFile()).executeStore(gappSQLStmt);
+                return executeStore(new GappDBHelper(gatorFileInfo.getConfFile()),
+                        "app_fn_add_import", param);
         }
 
         static List<List<String>> parseDelimited(String content, char delimiter) {
@@ -524,9 +517,9 @@ public class GatorFileImportProcessor {
                 return parsed;
         }
 
-        private static GatorFileInfo requireFileInfo(GatorFileInfo fileInfo) {
+        static GatorFileInfo requireFileInfo(GatorFileInfo fileInfo, boolean fileRequired) {
                 require(fileInfo != null, "La información del archivo es obligatoria");
-                requireText(fileInfo.getFileName(), "fileName");
+                if(fileRequired) requireText(fileInfo.getFileName(), "fileName");
                 requireText(fileInfo.getConfFile(), "confFile");
                 requireText(fileInfo.getAccount(), "cuentaId");
                 requireText(fileInfo.getWarehouse(), "bodegaId");
