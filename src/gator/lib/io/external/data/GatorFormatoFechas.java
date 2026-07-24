@@ -28,6 +28,9 @@ public class GatorFormatoFechas {
         public boolean haveFormats() {
                 return !lineasConFormato.isEmpty();
         }
+        public int size() {
+                return lineasConFormato.size();
+        }
         public GatorFormatoFecha getLinea(int i) {                
                 return lineasConFormato.get(i);
         }

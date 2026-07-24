@@ -32,9 +32,19 @@ import gator.lib.logs.GappLogging;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Pattern;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  *
@@ -42,41 +52,14 @@ import java.util.regex.Pattern;
  */
 public class GatorFileImportProcessor {
         /**
-         * Regular expression for commas.
-         */
-         String otherThanQuote = " [^\"] ";
-         String quotedString = String.format(" \" %s* \" ", otherThanQuote);
-         String commaRegex = String.format("(?x),(?=(?:%s*%s)*%s*$)",otherThanQuote, quotedString, otherThanQuote);
-
-         /**
-          * Regular expression for semicolons.
-          */
-        String semicolonRegex = String.format("(?x);(?=(?:%s*%s)*%s*$)",otherThanQuote, quotedString, otherThanQuote);
-
-        /**
-          * Regular expression for pipes.
-          */
-        String pipeRegex = String.format("(?x)\\|(?=(?:%s*%s)*%s*$)",otherThanQuote, quotedString, otherThanQuote);
-
-        /**
-	 * File manager.
-	 */
-	private final GappFiles gappFiles = new GappFiles();
-
-        /**
          * Separator.
          */
-        private String separator = ",";
+        private char separator = ',';
 
         /**
-         * Separator name.
+         * Parsed records.
          */
-        private String separatorName = "::comma::";
-
-        /**
-         * Original read lines.
-         */
-        private String[] lines;
+        private List<List<String>> records = List.of();
 
         /**
          * File headers.
@@ -129,7 +112,7 @@ public class GatorFileImportProcessor {
          */
         private ArrayList<String> columnNames = new ArrayList<>();
         private final ArrayList<ArrayList<String>> values = new ArrayList<>();
-        private HashMap<String, String> parametros = new HashMap<>();
+        private Map<String, Object> parametros = new HashMap<>();
         private String parametrosStr = "";
 
         /**
@@ -137,9 +120,9 @@ public class GatorFileImportProcessor {
          */
         private String status = ""; 
         
-        private String uniqcodeRegExp = "[\ufeff]+";
-        
         private GatorFileInfo gatorFileInfo;
+
+        private static final Pattern PROCEDURE_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_.$#]*");
         
         /**
          * Default Constructor for this class.
@@ -150,34 +133,34 @@ public class GatorFileImportProcessor {
                 gappLog.startNewLog("GatorFileImportProcessor", "Default");
                 gappLog.setName("constructor-default");
                 gappLog.setFileToLog("import");
-                gatorFileInfo = fileInfo;
+                gatorFileInfo = requireFileInfo(fileInfo);
                 gappLogger.logIt(gappLog);
                 gappLog.addMessage("with file name", 1);
                 dbhelper = new GappDBHelper(gatorFileInfo.getConfFile());                
-                gappFiles.setDir(GappFiles.FILES_DIR);
-                gappLog.addMessage("Importing file:" + GappFiles.FILES_DIR + gatorFileInfo.getFileName(), 1);                
-                String encoding = gappFiles.getCharacterEncoding(GappFiles.FILES_DIR + gatorFileInfo.getFileName()).toUpperCase();
-                Pattern utf8Patt = Pattern.compile("^(?i)utf-8");
-                if(utf8Patt.matcher(encoding).find()) {
-                        encoding = "UTF-8";
-                }
-                gappLog.addMessage("Encoding:" + encoding, 1);
-                
-                gappFiles.readFromFile(GappFiles.FILES_DIR + gatorFileInfo.getFileName(), encoding);
-                lines = gappFiles.getReadedLines();
-                gappLog.addMessage("Lines: " + lines.length, 1);                
-                gappLogger.logIt(gappLog);
-                detectSeparator();                
-                setHeaders();               
-                if(resNum.equals("0")) {
-                        Gson gson = new Gson();                                        
-                        processLines();
-                        responses = gson.fromJson(status, GappResponses.class);  
-                        gappLog.addMessage("After processing lines about to call afterProcessLine", 1);                
-                        gappLogger.logIt(gappLog);                        
-                        if(responses.getResponses().get(0).getResNum().equals("0")) {
-                                afterProcessLines();
+                try {
+                        Path file = validatedFile();
+                        gappLog.addMessage("Importing file:" + file, 1);
+                        String encoding = detectEncoding(file);
+                        gappLog.addMessage("Encoding:" + encoding, 1);
+
+                        detectSeparator(Files.readString(file, Charset.forName(encoding)));
+                        require(records.size() >= 2, "El archivo debe contener encabezado y al menos una fila");
+                        gappLog.addMessage("Records: " + records.size(), 1);
+                        gappLogger.logIt(gappLog);
+                        setHeaders();
+                        if(resNum.equals("0")) {
+                                processLines();
+                                responses = parseResponses(status, "procesamiento de filas");
+                                gappLog.addMessage("After processing lines about to call afterProcessLine", 1);
+                                gappLogger.logIt(gappLog);
+                                if(firstResponse(responses, "procesamiento de filas").getResNum().equals("0")) {
+                                        afterProcessLines();
+                                }
                         }
+                } catch (Exception e) {
+                        setErrorStatus(e.getMessage());
+                        gappLog.addMessage(gappLogger.getStackTraceString(e), 2);
+                        gappLogger.logIt(gappLog);
                 }
         }
         
@@ -189,7 +172,7 @@ public class GatorFileImportProcessor {
         public GatorFileImportProcessor(GatorFileInfo fileInfo, boolean isSecond) {
                 gappLog.startNewLog("GatorFileImportProcessor", "GatorFileImportProcessor");
                 gappLog.setName("fileinfo-issecond");
-                gatorFileInfo = fileInfo;
+                gatorFileInfo = requireFileInfo(fileInfo);
                 gappLogger.logIt("GatorFileImportProcessor", "","import", "system", 0);                
                 gappLog.addMessage("Just config", 1);
                 dbhelper = new GappDBHelper(gatorFileInfo.getConfFile());
@@ -200,41 +183,48 @@ public class GatorFileImportProcessor {
          * Identify the separator used in the file, the separator could be
          * either of the following: (,), (;), (|).
          */
-        private void detectSeparator() {
+        private void detectSeparator(String content) {
                 gappLog.startNewLog("GatorFileImportProcessor", "detectSeparator");
                 gappLog.setName("import-detect-separator");
-                String tokens[] = lines[0].split(commaRegex);
-                String tokens1[] = lines[1].split(commaRegex);
-                String realRegex = "";
-
-                if(tokens.length > 1 && tokens.length == tokens1.length) {
-                        separator = ",";
-                        separatorName = "::comma::";
-                        gappLog.addMessage("Sep:" + separator, 1);
-                        gappLog.addMessage("Lengths: (" + tokens.length + "), (" + tokens1.length + ")", 1);
-                        realRegex = commaRegex;
+                char[] separators = {',', ';', '|'};
+                int bestColumns = 1;
+                int bestIndex = -1;
+                boolean ambiguous = false;
+                List<List<String>> bestRecords = List.of();
+                IllegalArgumentException parseError = null;
+                for(int i = 0; i < separators.length; i++) {
+                        List<List<String>> candidate;
+                        try {
+                                candidate = parseDelimited(content, separators[i]);
+                        } catch(IllegalArgumentException e) {
+                                if(parseError == null) parseError = e;
+                                continue;
+                        }
+                        if(candidate.size() < 2) continue;
+                        int headerColumns = candidate.get(0).size();
+                        int firstRowColumns = candidate.get(1).size();
+                        if(headerColumns > bestColumns && headerColumns == firstRowColumns) {
+                                bestColumns = headerColumns;
+                                bestIndex = i;
+                                bestRecords = candidate;
+                                ambiguous = false;
+                        } else if(headerColumns == bestColumns && headerColumns > 1 && headerColumns == firstRowColumns) {
+                                ambiguous = true;
+                        }
                 }
-
-                tokens = lines[0].split(semicolonRegex);
-                tokens1 = lines[1].split(semicolonRegex);
-                if(tokens.length > 1 && tokens.length == tokens1.length) {
-                        separator = ";";
-                        separatorName = "::semicolon::";
-                        gappLog.addMessage("Sep:" + separator, 1);
-                        gappLog.addMessage("Lengths: (" + tokens.length + "), (" + tokens1.length + ")", 1);
-                        realRegex = semicolonRegex;
+                if(bestIndex < 0 && parseError != null) throw parseError;
+                require(bestIndex >= 0, "No se detectó un separador válido");
+                require(!ambiguous, "El separador del archivo es ambiguo");
+                separator = separators[bestIndex];
+                records = bestRecords;
+                fileHeaders = new ArrayList<>(records.get(0));
+                if(!fileHeaders.isEmpty()) {
+                        fileHeaders.set(0, fileHeaders.get(0).replaceFirst("^\ufeff", ""));
                 }
-
-                tokens = lines[0].split(pipeRegex);
-                tokens1 = lines[1].split(pipeRegex);
-                if(tokens.length > 1 && tokens.length == tokens1.length) {
-                        separator = "|";
-                        separatorName = "::pipe::";
-                        gappLog.addMessage("Sep:" + separator, 1);
-                        gappLog.addMessage("Lengths: (" + tokens.length + "), (" + tokens1.length + ")", 1);
-                        realRegex = pipeRegex;
-                }
-                fileHeaders = new ArrayList(Arrays.asList(lines[0].replaceAll(uniqcodeRegExp, "").split(realRegex)));
+                require(fileHeaders.stream().noneMatch(String::isBlank), "El encabezado contiene columnas vacías");
+                require(new HashSet<>(fileHeaders).size() == fileHeaders.size(), "El encabezado contiene columnas duplicadas");
+                gappLog.addMessage("Sep:" + separator, 1);
+                gappLog.addMessage("Columns:" + bestColumns, 1);
                 status = "Header detected successfuly";                        
                 gappLog.addMessage("Detect separator finished.", 0);  
                 gappLogger.logIt(gappLog);
@@ -245,7 +235,6 @@ public class GatorFileImportProcessor {
         private void processLines() {
                 gappLog.startNewLog("GatorFileImportProcessor", "processLines");
                 gappLog.setName("import-process-lines");
-                String lineSplited[];
                 HashMap<String, String> procLineAsHash;
                 ArrayList<String> tmpLine = new ArrayList<>();
                 int lineNumber = -1;
@@ -253,48 +242,23 @@ public class GatorFileImportProcessor {
                 try{
                         gappLog.addMessage("Process Lines started.", 0);
                         gappLogger.logIt(gappLog);
-	                if(separatorName.equals("::comma::")) {
-	                        for(int i = 1; i < lines.length; i++) {
-	                                lineNumber = i;
-	                                line = lines[i];
-	                                lineSplited = lines[i].replaceAll(uniqcodeRegExp, "").split(commaRegex);
-	                                procLineAsHash = new HashMap<>();
-                                        tmpLine = new ArrayList(Arrays.asList(lineSplited));	                                
-	                                for(int j = 0; j < columnNames.size(); j++){
-	                                        procLineAsHash.put(columnNames.get(j), lineSplited[j]);;
-	                                }
-	                                processLinesAsHashMap.add(procLineAsHash);
-                                        values.add(tmpLine);
-	                        }
-	                }
-	                if(separatorName.equals("::semicolon::")) {
-	                        for(int i = 1; i < lines.length; i++) {
-	                                lineNumber = i;
-	                                line = lines[i];
-	                                lineSplited = lines[i].replaceAll(uniqcodeRegExp, "").split(semicolonRegex);
-	                                procLineAsHash = new HashMap<>();
-                                        tmpLine = new ArrayList(Arrays.asList(lineSplited));
-	                                for(int j = 0; j < columnNames.size(); j++){
-	                                        procLineAsHash.put(columnNames.get(j), lineSplited[j]);
-	                                }
-	                                processLinesAsHashMap.add(procLineAsHash);
-                                        values.add(tmpLine);
-	                        }
-	                }
-	                if(separatorName.equals("::pipe::")) {
-	                        for(int i = 1; i < lines.length; i++) {
-	                                lineNumber = i;
-	                                line = lines[i];
-	                                lineSplited = lines[i].replaceAll(uniqcodeRegExp, "").split(pipeRegex);
-	                                procLineAsHash = new HashMap<>();
-                                        tmpLine = new ArrayList(Arrays.asList(lineSplited));
-	                                for(int j = 0; j < columnNames.size(); j++){
-	                                        procLineAsHash.put(columnNames.get(j), lineSplited[j]);
-	                                }
-	                                processLinesAsHashMap.add(procLineAsHash);
-                                        values.add(tmpLine);
-	                        }
-	                }                        
+                        for(int i = 1; i < records.size(); i++) {
+                                lineNumber = i;
+                                List<String> record = records.get(i);
+                                line = record.toString();
+                                require(!(record.size() == 1 && record.get(0).isBlank()),
+                                        "El registro " + (i + 1) + " está vacío");
+                                require(record.size() == columnNames.size(),
+                                        "El registro " + (i + 1) + " tiene " + record.size()
+                                        + " columnas; se esperaban " + columnNames.size());
+                                procLineAsHash = new HashMap<>();
+                                tmpLine = new ArrayList<>(record);
+                                for(int j = 0; j < columnNames.size(); j++){
+                                        procLineAsHash.put(columnNames.get(j), record.get(j));
+                                }
+                                processLinesAsHashMap.add(procLineAsHash);
+                                values.add(tmpLine);
+                        }
 			status = "{\"responses\" : [{\"resNum\" : \"0\", \"response\" : {\"message\" : \"Lines processed successfuly\"}}]}";                        
                         gappLog.addMessage("Process Lines finished.", 0);
                         gappLogger.logIt(gappLog);
@@ -303,7 +267,7 @@ public class GatorFileImportProcessor {
                         gappLog.addMessage("Error at data:" + line, 2);
                         gappLog.addMessage(gappLogger.getStackTraceString(e), 2);  
                         gappLogger.logIt(gappLog);
-			status = "{\"responses\" : [{\"resNum\" : \"-1\", \"response\" : {\"message\" : \"Error at line:" + lineNumber + " " + "line:" + line + "\"}}]}";
+                        setErrorStatus("Error en línea " + (lineNumber + 1) + ": " + line);
                 }
         }
 
@@ -345,14 +309,31 @@ public class GatorFileImportProcessor {
                 gappSQLStmt.addParam(gson.toJson(jsonObj));                
                 String jsonProcess = dbhelper.executeStore(gappSQLStmt);
                 status = jsonProcess;
-                responses = gson.fromJson(jsonProcess, GappResponses.class);
-                resNum = responses.getResponses().get(0).getResNum();
-                columnNames = (ArrayList<String>)responses.getResponses().get(0).getResponse().get("columnas");
-                procedure = (String) responses.getResponses().get(0).getResponse().get("procedimiento");
-                generador = (String) responses.getResponses().get(0).getResponse().get("generador");
-                executor = (String) responses.getResponses().get(0).getResponse().get("ejecutor");		   
-                parametrosStr = gson.toJson(responses.getResponses().get(0).getResponse().get("parametros"));
-                parametros = gson.fromJson(parametrosStr, HashMap.class);
+                responses = parseResponses(jsonProcess, "app_fn_get_proceso2");
+                GappResponse response = firstResponse(responses, "app_fn_get_proceso2");
+                resNum = response.getResNum();
+                if(!resNum.equals("0")) return;
+                columnNames = requireStringList(response.getResponse().get("columnas"), "columnas");
+                require(columnNames.size() == fileHeaders.size(),
+                        "La configuración devuelve " + columnNames.size()
+                        + " columnas; el archivo contiene " + fileHeaders.size());
+                require(new HashSet<>(columnNames).size() == columnNames.size(),
+                        "La configuración contiene columnas duplicadas");
+                procedure = requireProcedure(response.getResponse().get("procedimiento"), "procedimiento");
+                generador = optionalProcedure(response.getResponse().get("generador"), "generador");
+                executor = optionalString(response.getResponse().get("ejecutor"));
+                Object responseParameters = response.getResponse().get("parametros");
+                require(responseParameters == null || responseParameters instanceof Map<?, ?>,
+                        "parametros debe ser un objeto");
+                parametrosStr = gson.toJson(responseParameters == null ? Map.of() : responseParameters);
+                parametros = new HashMap<>();
+                if(responseParameters instanceof Map<?, ?> map) {
+                        for(Map.Entry<?, ?> entry : map.entrySet()) {
+                                require(entry.getKey() instanceof String,
+                                        "Las claves de parametros deben ser texto");
+                                parametros.put((String) entry.getKey(), entry.getValue());
+                        }
+                }
                 gappLog.addMessage("Set headers done.", 1);
                 gappLogger.logIt(gappLog);                
         }
@@ -381,18 +362,24 @@ public class GatorFileImportProcessor {
                 gappSQLStmt.setStoreProcedure(procedure);
                 gappSQLStmt.addParam(gson.toJson(jsonObj));                
                 String jsonProcess = dbhelper.executeStore(gappSQLStmt);
-                responses = gson.fromJson(jsonProcess, GappResponses.class);
-                status = jsonProcess;                                
+                responses = parseResponses(jsonProcess, procedure);
+                status = jsonProcess;
                 gappLog.addMessage("Verifying lines done.", 0);
                 gappLogger.logIt(gappLog);
-                if(responses.getResponses().get(0).getResNum().equals("0")) {			
-			String tabla = (String) responses.getResponses().get(0).getResponse().get("tabla");
-                        String conds = gson.toJson(responses.getResponses().get(0).getResponse().get("condiciones"));
-                        ArrayList<String> condiciones = gson.fromJson(conds, ArrayList.class);
-	                String refs = gson.toJson(responses.getResponses().get(0).getResponse().get("referencias"));
-                        String formatos = gson.toJson(responses.getResponses().get(0).getResponse().get("formatos"));                        
-	                ArrayList<String> referencias = gson.fromJson(refs, ArrayList.class);
-                        GatorFormatoFechas formatoFechas = gson.fromJson(formatos, GatorFormatoFechas.class);
+                GappResponse response = firstResponse(responses, procedure);
+                if(response.getResNum().equals("0")) {
+                        String tabla = requireString(response.getResponse().get("tabla"), "tabla");
+                        ArrayList<String> condiciones = requireStringList(response.getResponse().get("condiciones"), "condiciones");
+                        require(condiciones.size() == 2,
+                                "La validación debe devolver exactamente dos condiciones");
+                        ArrayList<String> referencias = requireStringList(response.getResponse().get("referencias"), "referencias");
+                        require(referencias.size() == values.size(),
+                                "La validación devolvió " + referencias.size()
+                                + " referencias para " + values.size() + " filas");
+                        Object formatos = response.getResponse().get("formatos");
+                        GatorFormatoFechas formatoFechas = formatos == null
+                                ? new GatorFormatoFechas()
+                                : gson.fromJson(gson.toJson(formatos), GatorFormatoFechas.class);
                         addImport(tabla, condiciones, referencias, formatoFechas);                        
                 }
         }
@@ -409,14 +396,14 @@ public class GatorFileImportProcessor {
                 if(formatoFechas == null) {
                     formatoFechas = new GatorFormatoFechas();
                 } 
-                ExecutorService pool = Executors.newFixedThreadPool(600);  
-                ArrayList<String> tmpList = columnNames;
+                ArrayList<String> tmpList = new ArrayList<>(columnNames);
                 ArrayList<String> value;
                 tmpList.add("cuenta_id");
                 tmpList.add("bodega_id");
                 tmpList.add("idctrl");
                 tmpList.add("sesion_id");
                 tmpList.add("usuario_id");                
+                ArrayList<Callable<String>> imports = new ArrayList<>();
                 for(int i = 0; i < referencias.size(); i++) {
                         final GatorAdmonTablas  admonTablas0 = new GatorAdmonTablas();
                         admonTablas0.setDebugLevel("0");
@@ -431,50 +418,310 @@ public class GatorFileImportProcessor {
                         admonTablas0.addConditionFields(condiciones);
                         admonTablas0.setUsuarioId(gatorFileInfo.getUser());
                         admonTablas0.setSesionId(gatorFileInfo.getSeionId());
-                        value = values.get(i);
+                        value = new ArrayList<>(values.get(i));
                         value.add(gatorFileInfo.getAccount());
                         value.add(gatorFileInfo.getWarehouse());
                         value.add(gatorFileInfo.getIdctrl());
                         value.add(gatorFileInfo.getSeionId());
                         value.add(gatorFileInfo.getUser());
                         if(formatoFechas.haveFormats()) {
+                                require(i < formatoFechas.size(),
+                                        "Falta la configuración de fechas para la fila " + (i + 1));
                                 for(int columna: formatoFechas.getLinea(i).getColumnas()){                        
+                                        require(columna >= 0 && columna < value.size(),
+                                                "Columna de fecha inválida: " + columna);
                                         gappLog.addMessage("Formatos columna: " + columna, 1);                                     
-                                        gappLog.addMessage("Formatos formato: " + formatoFechas.getLinea(i).getFormato(columna), 1);
+                                        String formato = requireText(
+                                                formatoFechas.getLinea(i).getFormato(columna),
+                                                "formato de fecha para columna " + columna);
+                                        gappLog.addMessage("Formatos formato: " + formato, 1);
                                         String tmp = value.get(columna);
                                         gappLog.addMessage("Formatos valor: " + tmp, 1);
                                         if(tmp.isEmpty()) {
                                                 value.set(columna, "::fn::null::fn::");
                                         } else {                                        
-                                                value.set(columna, "::fn::to_timestamp(::quote::" + tmp + "::quote::,::quote::" + formatoFechas.getLinea(i).getFormato(columna) + "::quote::)::fn::");
+                                                value.set(columna, "::fn::to_timestamp(::quote::" + tmp + "::quote::,::quote::" + formato + "::quote::)::fn::");
                                         }
                                 }
                         }
                         admonTablas0.addValues(value);                        
                         admonTablas0.addConditionValues(new ArrayList<>(Arrays.asList("::in::" + referencias.get(i) + "::in::","::noteq::1::noteq::")));                                
                         
+                        String importParam = gson.toJson(admonTablas0.getObject());
                         if(i == 0) {
-                            doImport(gson.toJson(admonTablas0.getObject()));
+                                status = executeImport(importParam);
+                                successfulResponse(status, "app_fn_add_import");
                         } else {
-                            pool.execute(() -> {                            
-                                doImport(gson.toJson(admonTablas0.getObject()));
-                            });                            
+                                imports.add(() -> executeImport(importParam));
                         }
-                        
+                }
+                for(String result : runParallel(imports)) {
+                        successfulResponse(result, "app_fn_add_import");
+                        status = result;
                 }
                 gappLog.addMessage("Importing done.", 0);
                 gappLogger.logIt(gappLog);                
-                pool.shutdown();
-	}
-        private synchronized void doImport(String param) {
-                Gson gson = new Gson();               
-                String jsonProcess;
+		}
+        private String executeImport(String param) {
                 GappSQLStatement gappSQLStmt = new GappSQLStatement();
                 gappSQLStmt.setStoreProcedure("app_fn_add_import");
                 gappSQLStmt.addParam(param);
-                jsonProcess = dbhelper.executeStoreSync(gappSQLStmt);					
-                responses = gson.fromJson(jsonProcess, GappResponses.class);
-                status = jsonProcess;
+                return new GappDBHelper(gatorFileInfo.getConfFile()).executeStore(gappSQLStmt);
+        }
+
+        static List<List<String>> parseDelimited(String content, char delimiter) {
+                ArrayList<List<String>> parsed = new ArrayList<>();
+                ArrayList<String> record = new ArrayList<>();
+                StringBuilder field = new StringBuilder();
+                boolean quoted = false;
+                boolean closedQuote = false;
+                boolean touched = false;
+                for(int i = 0; i < content.length(); i++) {
+                        char current = content.charAt(i);
+                        if(quoted) {
+                                if(current == '"' && i + 1 < content.length()
+                                        && content.charAt(i + 1) == '"') {
+                                        field.append('"');
+                                        i++;
+                                } else if(current == '"') {
+                                        quoted = false;
+                                        closedQuote = true;
+                                } else {
+                                        field.append(current);
+                                }
+                                continue;
+                        }
+                        if(current == '"') {
+                                require(field.isEmpty() && !closedQuote,
+                                        "Comilla inesperada en campo sin comillas");
+                                quoted = true;
+                                touched = true;
+                        } else if(current == delimiter) {
+                                record.add(field.toString());
+                                field.setLength(0);
+                                closedQuote = false;
+                                touched = true;
+                        } else if(current == '\r' || current == '\n') {
+                                if(current == '\r' && i + 1 < content.length()
+                                        && content.charAt(i + 1) == '\n') i++;
+                                record.add(field.toString());
+                                parsed.add(record);
+                                record = new ArrayList<>();
+                                field.setLength(0);
+                                closedQuote = false;
+                                touched = false;
+                        } else {
+                                require(!closedQuote, "Contenido inesperado después de cerrar comillas");
+                                field.append(current);
+                                touched = true;
+                        }
+                }
+                require(!quoted, "Campo con comillas sin cerrar");
+                if(touched || !record.isEmpty()) {
+                        record.add(field.toString());
+                        parsed.add(record);
+                }
+                return parsed;
+        }
+
+        private static GatorFileInfo requireFileInfo(GatorFileInfo fileInfo) {
+                require(fileInfo != null, "La información del archivo es obligatoria");
+                requireText(fileInfo.getFileName(), "fileName");
+                requireText(fileInfo.getConfFile(), "confFile");
+                requireText(fileInfo.getAccount(), "cuentaId");
+                requireText(fileInfo.getWarehouse(), "bodegaId");
+                requireText(fileInfo.getUser(), "usuario");
+                requireText(fileInfo.getIdctrl(), "idctrl");
+                requireText(fileInfo.getSeionId(), "sesionId");
+                return fileInfo;
+        }
+
+        private Path validatedFile() {
+                try {
+                        Path root = Path.of(GappFiles.FILES_DIR).toRealPath();
+                        Path file = root.resolve(gatorFileInfo.getFileName()).normalize();
+                        require(file.startsWith(root), "El archivo debe estar dentro de " + root);
+                        file = file.toRealPath();
+                        require(file.startsWith(root), "El archivo no puede ser un enlace fuera de " + root);
+                        require(Files.isRegularFile(file), "No existe el archivo: " + file);
+                        require(Files.isReadable(file), "No se puede leer el archivo: " + file);
+                        return file;
+                } catch(java.io.IOException e) {
+                        throw new IllegalArgumentException("No se puede resolver el archivo", e);
+                }
+        }
+
+        private String detectEncoding(Path file) {
+                try {
+                        Process process = new ProcessBuilder("chardetect", file.toString())
+                                .redirectErrorStream(true).start();
+                        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                        if(process.waitFor() == 0) {
+                                var matcher = Pattern.compile(":\\s*([^\\s]+)").matcher(output);
+                                if(matcher.find()) return Charset.forName(matcher.group(1)).name();
+                        }
+                } catch(Exception ignored) {
+                        // UTF-8 is the safe fallback when chardetect is unavailable.
+                }
+                return StandardCharsets.UTF_8.name();
+        }
+
+        static GappResponses parseResponses(String json, String operation) {
+                requireText(json, "respuesta de " + operation);
+                try {
+                        return new Gson().fromJson(json, GappResponses.class);
+                } catch(Exception e) {
+                        throw new IllegalStateException("Respuesta inválida de " + operation, e);
+                }
+        }
+
+        private static GappResponse firstResponse(GappResponses parsed, String operation) {
+                require(parsed != null && parsed.getResponses() != null
+                        && !parsed.getResponses().isEmpty(),
+                        "La respuesta de " + operation + " no contiene responses");
+                GappResponse response = parsed.getResponses().get(0);
+                require(response != null, "La respuesta de " + operation + " es nula");
+                requireText(response.getResNum(), "resNum de " + operation);
+                return response;
+        }
+
+        private static GappResponse successfulResponse(String json, String operation) {
+                GappResponse response = firstResponse(parseResponses(json, operation), operation);
+                require("0".equals(response.getResNum()),
+                        operation + " falló: " + optionalString(response.getResponse().get("message")));
+                return response;
+        }
+
+        private static String requireString(Object value, String name) {
+                require(value instanceof String, name + " debe ser texto");
+                return requireText((String) value, name);
+        }
+
+        private static String optionalString(Object value) {
+                return value == null ? "" : String.valueOf(value);
+        }
+
+        static String requireProcedure(Object value, String name) {
+                String procedure = requireString(value, name);
+                require(PROCEDURE_NAME.matcher(procedure).matches(),
+                        "Nombre de procedimiento inválido: " + procedure);
+                return procedure;
+        }
+
+        private static String optionalProcedure(Object value, String name) {
+                return value == null || String.valueOf(value).isBlank()
+                        ? "" : requireProcedure(value, name);
+        }
+
+        private static ArrayList<String> requireStringList(Object value, String name) {
+                require(value instanceof List<?>, name + " debe ser un arreglo");
+                ArrayList<String> result = new ArrayList<>();
+                for(Object item : (List<?>) value) result.add(requireString(item, name));
+                return result;
+        }
+
+        private static String requireText(String value, String name) {
+                require(value != null && !value.isBlank(), name + " es obligatorio");
+                return value;
+        }
+
+        private static void require(boolean condition, String message) {
+                if(!condition) throw new IllegalArgumentException(message);
+        }
+
+        private void setErrorStatus(String message) {
+                JsonObject response = new JsonObject();
+                response.addProperty("message", message == null ? "Error no especificado" : message);
+                JsonObject item = new JsonObject();
+                item.addProperty("resNum", "-1");
+                item.add("response", response);
+                JsonArray items = new JsonArray();
+                items.add(item);
+                JsonObject root = new JsonObject();
+                root.add("responses", items);
+                status = root.toString();
+        }
+
+        private String generatorParams(String parameters, Integer limit, Integer offset) {
+                Gson gson = new Gson();
+                JsonObject jsonObj = new JsonObject();
+                jsonObj.addProperty("cuentaId", gatorFileInfo.getAccount());
+                jsonObj.addProperty("bodegaId", gatorFileInfo.getWarehouse());
+                jsonObj.addProperty("debugLevel", 0);
+                jsonObj.addProperty("usuario", gatorFileInfo.getUser());
+                jsonObj.addProperty("sesionId", gatorFileInfo.getSeionId());
+                jsonObj.addProperty("idctrl", gatorFileInfo.getIdctrl());
+                JsonObject jsonParameters = parameters == null || parameters.isBlank()
+                        ? new JsonObject() : gson.fromJson(parameters, JsonObject.class);
+                require(jsonParameters != null, "parametros debe ser un objeto JSON");
+                jsonObj.add("parametros", jsonParameters);
+                if(limit != null) jsonObj.addProperty("limit", limit);
+                if(offset != null) jsonObj.addProperty("offset", offset);
+                return gson.toJson(jsonObj);
+        }
+
+        private List<Map<String, String>> procedureCalls(Object value) {
+                if(value == null) return List.of();
+                require(value instanceof List<?>, "procedimientos debe ser un arreglo");
+                ArrayList<Map<String, String>> result = new ArrayList<>();
+                for(Object item : (List<?>) value) {
+                        require(item instanceof Map<?, ?>, "Cada procedimiento debe ser un objeto");
+                        HashMap<String, String> call = new HashMap<>();
+                        for(Map.Entry<?, ?> entry : ((Map<?, ?>) item).entrySet()) {
+                                require(entry.getKey() instanceof String,
+                                        "Las claves de procedimiento deben ser texto");
+                                call.put((String) entry.getKey(), optionalString(entry.getValue()));
+                        }
+                        call.put("procedimiento",
+                                requireProcedure(call.get("procedimiento"), "procedimiento"));
+                        result.add(call);
+                }
+                return result;
+        }
+
+        private void executeProcedures(List<Map<String, String>> procedures) {
+                Gson gson = new Gson();
+                ArrayList<Callable<String>> parallel = new ArrayList<>();
+                for(int i = 0; i < procedures.size(); i++) {
+                        Map<String, String> call = procedures.get(i);
+                        String procedure = call.get("procedimiento");
+                        String params = gson.toJson(call);
+                        if(i == 0 || "1".equals(call.getOrDefault("amIFirst", "0"))) {
+                                successfulResponse(executeGeneratedProcedure(procedure, params), procedure);
+                        } else {
+                                parallel.add(() -> executeGeneratedProcedure(procedure, params));
+                        }
+                }
+                for(String result : runParallel(parallel)) {
+                        successfulResponse(result, "procedimiento generado");
+                }
+        }
+
+        private String executeGeneratedProcedure(String procedure, String params) {
+                return executeStore(new GappDBHelper(gatorFileInfo.getConfFile()), procedure, params);
+        }
+
+        private String executeStore(GappDBHelper helper, String procedure, String param) {
+                GappSQLStatement statement = new GappSQLStatement();
+                statement.setStoreProcedure(procedure);
+                statement.addParam(param);
+                return helper.executeStore(statement);
+        }
+
+        static List<String> runParallel(List<Callable<String>> tasks) {
+                if(tasks.isEmpty()) return List.of();
+                int threads = Math.min(tasks.size(),
+                        Math.max(2, Math.min(32, Runtime.getRuntime().availableProcessors())));
+                try(ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+                        ArrayList<String> results = new ArrayList<>();
+                        for(Future<String> future : pool.invokeAll(tasks)) results.add(future.get());
+                        return results;
+                } catch(InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("La ejecución concurrente fue interrumpida", e);
+                } catch(ExecutionException e) {
+                        throw new IllegalStateException("Falló una ejecución concurrente", e.getCause());
+                }
         }
         /**
          * Get the status for this processor.
@@ -486,10 +733,11 @@ public class GatorFileImportProcessor {
                 Gson gson = new Gson();
                 gappLog.addMessage("Importing getting status:" + status, 1);
                 gappLogger.logIt(gappLog);
-                GappResponses obj = gson.fromJson(status, GappResponses.class);
-                obj.getResponses().get(0).getResponse().put("generador", generador);
-                obj.getResponses().get(0).getResponse().put("parametros", parametros);
-                obj.getResponses().get(0).getResponse().put("ejecutor", executor);
+                GappResponses obj = parseResponses(status, "estado");
+                GappResponse response = firstResponse(obj, "estado");
+                response.getResponse().put("generador", generador);
+                response.getResponse().put("parametros", parametros);
+                response.getResponse().put("ejecutor", executor);
                 return gson.toJson(obj);
         }
         /**
@@ -499,14 +747,13 @@ public class GatorFileImportProcessor {
         public GappResponse getStatusAsResponse() {
                 gappLog.startNewLog("GatorFileImportProcessor", "getStatusAsResponse");
                 gappLog.setName("import-get-status");
-                Gson gson = new Gson();
                 gappLog.addMessage("Importing getting status:" + status, 1);
                 gappLogger.logIt(gappLog);                
-                GappResponses obj = gson.fromJson(status, GappResponses.class);
-                obj.getResponses().get(0).getResponse().put("generador", generador);
-                obj.getResponses().get(0).getResponse().put("parametros", parametros);
-                obj.getResponses().get(0).getResponse().put("ejecutor", executor);
-                return obj.getResponses().get(0);
+                GappResponse response = firstResponse(parseResponses(status, "estado"), "estado");
+                response.getResponse().put("generador", generador);
+                response.getResponse().put("parametros", parametros);
+                response.getResponse().put("ejecutor", executor);
+                return response;
         }
         /**
          * Allow to execute the generator of this process.
@@ -517,24 +764,17 @@ public class GatorFileImportProcessor {
         public void execGenerator(String generador, String parametros) {
                 gappLog.startNewLog("GatorFileImportProcessor", "execGenerator");
                 gappLog.setName("import-exec-generator");
-                Gson gson = new Gson();
-                JsonObject jsonObj = new JsonObject();
-                jsonObj.addProperty("cuentaId", gatorFileInfo.getAccount());
-                jsonObj.addProperty("bodegaId", gatorFileInfo.getWarehouse());
-                jsonObj.addProperty("debugLevel", 0);                
-                jsonObj.addProperty("usuario",  gatorFileInfo.getUser());
-                jsonObj.addProperty("sesionId",  gatorFileInfo.getSeionId());
-                jsonObj.addProperty("idctrl",  gatorFileInfo.getIdctrl());
-                JsonObject jsonParametros = gson.fromJson(parametros, JsonObject.class);
-                jsonObj.add("parametros", jsonParametros);
-                GappSQLStatement gappSQLStmt = new GappSQLStatement();
-                gappSQLStmt.setStoreProcedure(generador);
-                gappSQLStmt.addParam(gson.toJson(jsonObj));
-                String jsonProcess = dbhelper.executeStore(gappSQLStmt);
-                responses = gson.fromJson(jsonProcess, GappResponses.class);                
-		status = jsonProcess;  
-                gappLog.addMessage("Execute generator done.", 1);
-                gappLogger.logIt(gappLog);                
+                try {
+                        status = executeStore(dbhelper, requireProcedure(generador, "generador"),
+                                generatorParams(parametros, null, null));
+                        responses = parseResponses(status, generador);
+                        firstResponse(responses, generador);
+                        gappLog.addMessage("Execute generator done.", 1);
+                } catch(Exception e) {
+                        setErrorStatus(e.getMessage());
+                        gappLog.addMessage(gappLogger.getStackTraceString(e), 2);
+                }
+                gappLogger.logIt(gappLog);
         }
         /**
          * Allow to execute the generator of this process.
@@ -545,66 +785,24 @@ public class GatorFileImportProcessor {
         public void execGenerator3(String generador, String parametros) {
                 gappLog.startNewLog("GatorFileImportProcessor", "execGenerator3");
                 gappLog.setName("import-exec-generator3");
-	        Gson gson = new Gson();
-	        JsonObject jsonObj;
-	        JsonObject jsonParametros = gson.fromJson(parametros, JsonObject.class);
-	        GappSQLStatement gappSQLStmt;
-	        String jsonProcess;
-	       	ArrayList<HashMap<String,String>> procedimientos;
-                boolean goesOn = true;
-                ExecutorService pool = Executors.newFixedThreadPool(2400);
-		int limit = 600, offset = 0;
-                while(goesOn) {
-	                jsonObj = new JsonObject();
-	                jsonObj.addProperty("cuentaId", gatorFileInfo.getAccount());
-	                jsonObj.addProperty("bodegaId", gatorFileInfo.getWarehouse());
-	                jsonObj.addProperty("debugLevel", 0);
-	                jsonObj.addProperty("usuario",  gatorFileInfo.getUser());
-                        jsonObj.addProperty("sesionId",  gatorFileInfo.getSeionId());
-                        jsonObj.addProperty("idctrl",  gatorFileInfo.getIdctrl());
-	                jsonObj.addProperty("limit",  limit);
-	                jsonObj.addProperty("offset",  offset);
-	                jsonObj.add("parametros", jsonParametros);  
-
-			offset += limit;
-
-	                gappSQLStmt = new GappSQLStatement();
-	                gappSQLStmt.setStoreProcedure(generador);
-	                gappSQLStmt.addParam(gson.toJson(jsonObj));
-
-	                jsonProcess = dbhelper.executeStoreSync(gappSQLStmt);
-	                
-	                responses = gson.fromJson(jsonProcess, GappResponses.class);  
-	                status = jsonProcess;
-	                //gappLogger.logIt("execGenerator3", "Execute generator 3 done.","import", "system", 0);
-
-	                procedimientos = (ArrayList) responses.getResponses().get(0).getResponse().get("procedimientos");
-	                
-	                if(procedimientos == null) {                                
-	                        procedimientos = new ArrayList<>();
-	                        goesOn = false;
-	                }
-                        gappLog.addMessage("Procedimientos:" + procedimientos.size(), 1);                        
-	                for(int i = 0; i < procedimientos.size(); i++) {
-	                        String tmpProc = gson.toJson(procedimientos.get(i));
-	                        HashMap<String,String> proc = gson.fromJson(tmpProc, HashMap.class);
-	                        String isFirst = proc.get("amIFirst") == null?"0":proc.get("amIFirst");
-	                        final String procedimiento = proc.get("procedimiento");
-	                        final String params = tmpProc;
-	                        if(i == 0 || isFirst.equals("1")) {
-	                                doGenerate(procedimiento, params);
-	                        } else {                                        
-	                                pool.execute(new Runnable(){                                            
-	                                        public void run(){                                                
-	                                                doGenerate(procedimiento, params);
-	                                        }                                        
-	                                });
-	                        }
-                                gappLog.addMessage("procedimientos (i): " + i + ", (offset):" + offset, 1);                                
-	                }
-                }                
+                try {
+                        generador = requireProcedure(generador, "generador");
+                        int limit = 600;
+                        for(int offset = 0; ; offset += limit) {
+                                status = executeStore(dbhelper, generador,
+                                        generatorParams(parametros, limit, offset));
+                                responses = parseResponses(status, generador);
+                                List<Map<String, String>> procedimientos = procedureCalls(
+                                        successfulResponse(status, generador).getResponse().get("procedimientos"));
+                                gappLog.addMessage("Procedimientos:" + procedimientos.size(), 1);
+                                if(procedimientos.isEmpty()) break;
+                                executeProcedures(procedimientos);
+                        }
+                } catch(Exception e) {
+                        setErrorStatus(e.getMessage());
+                        gappLog.addMessage(gappLogger.getStackTraceString(e), 2);
+                }
                 gappLogger.logIt(gappLog);
-                pool.shutdown();
         }
         /**
          * Allow to execute the generator of this process.
@@ -615,51 +813,18 @@ public class GatorFileImportProcessor {
         public void execGenerator2(String generador, String parametros) {
                 gappLog.startNewLog("GatorFileImportProcessor", "execGenerator2");
                 gappLog.setName("import-exec-generator2");
-                Gson gson = new Gson();
-                JsonObject jsonObj = new JsonObject();
-                jsonObj.addProperty("cuentaId", gatorFileInfo.getAccount());
-                jsonObj.addProperty("bodegaId", gatorFileInfo.getWarehouse());
-                jsonObj.addProperty("debugLevel", 0);
-                jsonObj.addProperty("usuario",  gatorFileInfo.getUser());                        
-                jsonObj.addProperty("sesionId",  gatorFileInfo.getSeionId());                        
-                jsonObj.addProperty("idctrl",  gatorFileInfo.getIdctrl());
-                JsonObject jsonParametros = gson.fromJson(parametros, JsonObject.class);
-                jsonObj.add("parametros", jsonParametros);  
-                GappSQLStatement gappSQLStmt = new GappSQLStatement();
-                gappSQLStmt.setStoreProcedure(generador);
-                gappSQLStmt.addParam(gson.toJson(jsonObj));
-                String jsonProcess = dbhelper.executeStore(gappSQLStmt);
-                gappLog.addMessage("Execute generator2 result:" + jsonProcess, 1);
-
-                responses = gson.fromJson(jsonProcess, GappResponses.class);  
-                status = jsonProcess;
-                
-                gappLog.addMessage("About to start pool", 1);
-                ArrayList<HashMap<String,String>> procedimientos = (ArrayList)responses.getResponses().get(0).getResponse().get("procedimientos");
-                ExecutorService pool = Executors.newFixedThreadPool(50);
-                if(procedimientos == null) {
-                        procedimientos = new ArrayList<>();
-                        
+                try {
+                        generador = requireProcedure(generador, "generador");
+                        status = executeStore(dbhelper, generador, generatorParams(parametros, null, null));
+                        responses = parseResponses(status, generador);
+                        executeProcedures(procedureCalls(
+                                successfulResponse(status, generador).getResponse().get("procedimientos")));
+                        gappLog.addMessage("Execute generator done.", 1);
+                } catch(Exception e) {
+                        setErrorStatus(e.getMessage());
+                        gappLog.addMessage(gappLogger.getStackTraceString(e), 2);
                 }
-                for(int i = 0; i < procedimientos.size(); i++) {
-                        String tmpProc = gson.toJson(procedimientos.get(i));
-                        HashMap<String,String> proc = gson.fromJson(tmpProc, HashMap.class);
-                        String isFirst = proc.get("amIFirst");
-                        final String procedimiento = proc.get("procedimiento");
-                        final String params = tmpProc;
-                        if(i == 0 || isFirst.equals("1")) {
-                                doGenerate(procedimiento, params);
-                        } else {
-                                pool.execute(new Runnable(){                                            
-                                        public void run(){                                                
-                                                doGenerate(procedimiento, params);
-                                        }                                        
-                                });
-                        }
-                }
-                gappLog.addMessage("Execute generator done.", 1);
                 gappLogger.logIt(gappLog);
-                pool.shutdown();
         }
         /**
          * Allow to retrieve the generator for this process.
@@ -675,14 +840,19 @@ public class GatorFileImportProcessor {
          * @param procedimiento A string representing the generator.
          * @param parametros A string representing the parameters as JSON object.
          */
-        public synchronized void doGenerate(String procedimiento, String parametros) { 
+        public void doGenerate(String procedimiento, String parametros) {
                 gappLog.startNewLog("GatorFileImportProcessor", "doGenerate");
                 gappLog.setName("import-exec-doGenerate");
-                GappSQLStatement gappSQLStmt = new GappSQLStatement();
-                gappSQLStmt.setStoreProcedure(procedimiento);
-                gappSQLStmt.addParam(parametros);                
-                String jsonProcess = dbhelper.executeStoreSync(gappSQLStmt);
-                gappLog.addMessage("respuesta: " + jsonProcess, 1); 
+                try {
+                        String result = executeGeneratedProcedure(
+                                requireProcedure(procedimiento, "procedimiento"), parametros);
+                        successfulResponse(result, procedimiento);
+                        gappLog.addMessage("respuesta: " + result, 1);
+                } catch(Exception e) {
+                        setErrorStatus(e.getMessage());
+                        gappLog.addMessage(gappLogger.getStackTraceString(e), 2);
+                }
+                gappLogger.logIt(gappLog);
         }
         /**
          * Allow to retrieve the generator for this process.
