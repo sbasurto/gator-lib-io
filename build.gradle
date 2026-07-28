@@ -30,6 +30,14 @@ tasks.register('selfTest', JavaExec) {
     enableAssertions = true
 }
 
+tasks.register('pressureTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'gator.lib.io.external.GatorFileImportPressureCheck'
+    enableAssertions = true
+    args providers.gradleProperty('pressureArgs').map { it.split('\\|', -1) }.getOrElse([])
+}
+
 tasks.named('test') { failOnNoDiscoveredTests = false }
 tasks.named('check') { dependsOn selfTest }
 tasks.named('clean') { delete 'dist' }

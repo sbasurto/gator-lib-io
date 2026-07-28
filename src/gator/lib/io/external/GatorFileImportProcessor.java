@@ -51,6 +51,8 @@ import java.nio.file.Path;
  * @author <a href="mailto:sbasurto@soft-gator.com">Sergio Basurto Juárez</a>
  */
 public class GatorFileImportProcessor {
+        private static final int IMPORT_BATCH_SIZE = 500;
+
         /**
          * Separator.
          */
@@ -392,63 +394,57 @@ public class GatorFileImportProcessor {
                     formatoFechas = new GatorFormatoFechas();
                 } 
                 ArrayList<String> tmpList = new ArrayList<>(columnNames);
-                ArrayList<String> value;
                 tmpList.add("cuenta_id");
                 tmpList.add("bodega_id");
                 tmpList.add("idctrl");
                 tmpList.add("sesion_id");
                 tmpList.add("usuario_id");                
                 ArrayList<Callable<String>> imports = new ArrayList<>();
-                for(int i = 0; i < referencias.size(); i++) {
+                for(int start = 0; start < referencias.size();) {
                         final GatorAdmonTablas  admonTablas0 = new GatorAdmonTablas();
                         admonTablas0.setDebugLevel("0");
-                        admonTablas0.addTable(tabla);
-                        if(i == 0) {
-                            admonTablas0.addAccion("baja");
-                        } else {
-                            admonTablas0.addAccion("alta");
-                        }
                         admonTablas0.setIdCtrl(gatorFileInfo.getIdctrl());
-                        admonTablas0.addFields(tmpList);
-                        admonTablas0.addConditionFields(condiciones);
                         admonTablas0.setUsuarioId(gatorFileInfo.getUser());
                         admonTablas0.setSesionId(gatorFileInfo.getSeionId());
-                        value = new ArrayList<>(values.get(i));
-                        value.add(gatorFileInfo.getAccount());
-                        value.add(gatorFileInfo.getWarehouse());
-                        value.add(gatorFileInfo.getIdctrl());
-                        value.add(gatorFileInfo.getSeionId());
-                        value.add(gatorFileInfo.getUser());
-                        if(formatoFechas.haveFormats()) {
-                                require(i < formatoFechas.size(),
-                                        "Falta la configuración de fechas para la fila " + (i + 1));
-                                for(int columna: formatoFechas.getLinea(i).getColumnas()){                        
-                                        require(columna >= 0 && columna < value.size(),
-                                                "Columna de fecha inválida: " + columna);
-                                        gappLog.addMessage("Formatos columna: " + columna, 1);                                     
-                                        String formato = requireText(
-                                                formatoFechas.getLinea(i).getFormato(columna),
-                                                "formato de fecha para columna " + columna);
-                                        gappLog.addMessage("Formatos formato: " + formato, 1);
-                                        String tmp = value.get(columna);
-                                        gappLog.addMessage("Formatos valor: " + tmp, 1);
-                                        if(tmp.isEmpty()) {
-                                                value.set(columna, "::fn::null::fn::");
-                                        } else {                                        
-                                                value.set(columna, "::fn::to_timestamp(::quote::" + tmp + "::quote::,::quote::" + formato + "::quote::)::fn::");
+                        int end = importBatchEnd(start, referencias.size());
+                        for(int i = start; i < end; i++) {
+                                admonTablas0.addTable(tabla);
+                                admonTablas0.addAccion(i == 0 ? "baja" : "alta");
+                                admonTablas0.addFields(tmpList);
+                                admonTablas0.addConditionFields(condiciones);
+                                ArrayList<String> value = new ArrayList<>(values.get(i));
+                                value.add(gatorFileInfo.getAccount());
+                                value.add(gatorFileInfo.getWarehouse());
+                                value.add(gatorFileInfo.getIdctrl());
+                                value.add(gatorFileInfo.getSeionId());
+                                value.add(gatorFileInfo.getUser());
+                                if(formatoFechas.haveFormats()) {
+                                        require(i < formatoFechas.size(),
+                                                "Falta la configuración de fechas para la fila " + (i + 1));
+                                        for(int columna: formatoFechas.getLinea(i).getColumnas()){
+                                                require(columna >= 0 && columna < value.size(),
+                                                        "Columna de fecha inválida: " + columna);
+                                                String formato = requireText(
+                                                        formatoFechas.getLinea(i).getFormato(columna),
+                                                        "formato de fecha para columna " + columna);
+                                                String tmp = value.get(columna);
+                                                value.set(columna, tmp.isEmpty()
+                                                        ? "::fn::null::fn::"
+                                                        : "::fn::to_timestamp(::quote::" + tmp + "::quote::,::quote::" + formato + "::quote::)::fn::");
                                         }
                                 }
+                                admonTablas0.addValues(value);
+                                admonTablas0.addConditionValues(new ArrayList<>(Arrays.asList(
+                                        "::in::" + referencias.get(i) + "::in::", "::noteq::1::noteq::")));
                         }
-                        admonTablas0.addValues(value);                        
-                        admonTablas0.addConditionValues(new ArrayList<>(Arrays.asList("::in::" + referencias.get(i) + "::in::","::noteq::1::noteq::")));                                
-                        
                         String importParam = gson.toJson(admonTablas0.getObject());
-                        if(i == 0) {
+                        if(start == 0) {
                                 status = executeImport(importParam);
                                 successfulResponse(status, "app_fn_add_import");
                         } else {
                                 imports.add(() -> executeImport(importParam));
                         }
+                        start = end;
                 }
                 for(String result : runParallel(imports)) {
                         successfulResponse(result, "app_fn_add_import");
@@ -457,6 +453,11 @@ public class GatorFileImportProcessor {
                 gappLog.addMessage("Importing done.", 0);
                 gappLogger.logIt(gappLog);                
 		}
+
+        static int importBatchEnd(int start, int rows) {
+                return Math.min(rows, start == 0 ? 1 : start + IMPORT_BATCH_SIZE);
+        }
+
         private String executeImport(String param) {
                 return executeStore(new GappDBHelper(gatorFileInfo.getConfFile()),
                         "app_fn_add_import", param);

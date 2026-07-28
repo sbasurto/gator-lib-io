@@ -15,6 +15,9 @@ public final class GatorAdmonTablasSelfCheck {
         tables.addValues(new ArrayList<>(java.util.List.of("A-1")));
         assert "inventory".equals(tables.getObject().getAsJsonArray("tablas").get(0).getAsString());
         assert "alta".equals(tables.getObject().getAsJsonArray("acciones").get(0).getAsString());
+        assert GatorFileImportProcessor.importBatchEnd(0, 10_000) == 1;
+        assert GatorFileImportProcessor.importBatchEnd(1, 10_000) == 501;
+        assert GatorFileImportProcessor.importBatchEnd(9_501, 10_000) == 10_000;
         List<List<String>> csv = GatorFileImportProcessor.parseDelimited(
                 "id,description,notes\r\n1,\"a,b\",\"line 1\nline 2\"\r\n2,\"x\"\"y\",\r\n", ',');
         assert csv.size() == 3;
