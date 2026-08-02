@@ -3,6 +3,7 @@ package gator.lib.io.external;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import gator.lib.io.external.data.GatorFileInfo;
 
@@ -64,5 +65,10 @@ public final class GatorAdmonTablasSelfCheck {
                 () -> { ready.countDown(); assert ready.await(2, TimeUnit.SECONDS); return "a"; },
                 () -> { ready.countDown(); assert ready.await(2, TimeUnit.SECONDS); return "b"; });
         assert GatorFileImportProcessor.runParallel(concurrent).size() == 2;
+        ThreadPoolExecutor importPool = GatorFileImportProcessor.IMPORT_POOL;
+        assert importPool.getCorePoolSize() == 0;
+        assert importPool.getMaximumPoolSize() == 4;
+        assert importPool.getKeepAliveTime(TimeUnit.SECONDS) == 60;
+        assert importPool.getRejectedExecutionHandler() instanceof ThreadPoolExecutor.CallerRunsPolicy;
     }
 }

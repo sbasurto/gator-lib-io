@@ -37,9 +37,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -52,6 +53,18 @@ import java.nio.file.Path;
  */
 public class GatorFileImportProcessor {
         private static final int IMPORT_BATCH_SIZE = 500;
+        static final ThreadPoolExecutor IMPORT_POOL = new ThreadPoolExecutor(
+                0,
+                4,
+                60,
+                TimeUnit.SECONDS,
+                new SynchronousQueue<>(),
+                runnable -> {
+                        Thread thread = new Thread(runnable, "gator-file-import");
+                        thread.setDaemon(true);
+                        return thread;
+                },
+                new ThreadPoolExecutor.CallerRunsPolicy());
 
         /**
          * Separator.
@@ -704,11 +717,9 @@ public class GatorFileImportProcessor {
 
         static List<String> runParallel(List<Callable<String>> tasks) {
                 if(tasks.isEmpty()) return List.of();
-                int threads = Math.min(tasks.size(),
-                        Math.max(2, Math.min(32, Runtime.getRuntime().availableProcessors())));
-                try(ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+                try {
                         ArrayList<String> results = new ArrayList<>();
-                        for(Future<String> future : pool.invokeAll(tasks)) results.add(future.get());
+                        for(Future<String> future : IMPORT_POOL.invokeAll(tasks)) results.add(future.get());
                         return results;
                 } catch(InterruptedException e) {
                         Thread.currentThread().interrupt();
