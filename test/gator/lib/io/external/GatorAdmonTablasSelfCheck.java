@@ -67,7 +67,7 @@ public final class GatorAdmonTablasSelfCheck {
         assert GatorFileImportProcessor.runParallel(concurrent).size() == 2;
         ThreadPoolExecutor importPool = GatorFileImportProcessor.IMPORT_POOL;
         assert importPool.getCorePoolSize() == 0;
-        assert importPool.getMaximumPoolSize() == 4;
+        assert importPool.getMaximumPoolSize() == 60;
         assert importPool.getKeepAliveTime(TimeUnit.SECONDS) == 60;
         assert importPool.getRejectedExecutionHandler() instanceof ThreadPoolExecutor.CallerRunsPolicy;
     }

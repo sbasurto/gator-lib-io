@@ -55,7 +55,7 @@ public class GatorFileImportProcessor {
         private static final int IMPORT_BATCH_SIZE = 500;
         static final ThreadPoolExecutor IMPORT_POOL = new ThreadPoolExecutor(
                 0,
-                4,
+                60,
                 60,
                 TimeUnit.SECONDS,
                 new SynchronousQueue<>(),
