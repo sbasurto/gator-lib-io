@@ -29,6 +29,7 @@ public class GatorFileInfo {
         private String usuario; 
         private String idctrl;
         private String sesionId;
+        private String processType;
         public void setFileName(String _fileName) {
                 fileName = _fileName;
         }
@@ -50,6 +51,9 @@ public class GatorFileInfo {
         public void setSessionId(String _sesionId) {
                 sesionId = _sesionId;
         }
+        public void setProcessType(String _processType) {
+                processType = _processType;
+        }
         public String getFileName() {
                 return fileName;
         }
@@ -70,5 +74,8 @@ public class GatorFileInfo {
         }
         public String getSeionId() {
                 return sesionId;
+        }
+        public String getProcessType() {
+                return processType;
         }
 }

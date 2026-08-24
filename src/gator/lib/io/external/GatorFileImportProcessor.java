@@ -318,6 +318,7 @@ public class GatorFileImportProcessor {
                 jsonObj.addProperty("usuario",  gatorFileInfo.getUser());
                 jsonObj.addProperty("sesionId",  gatorFileInfo.getSeionId());
                 jsonObj.addProperty("idctrl",  gatorFileInfo.getIdctrl());
+                jsonObj.addProperty("tipoProceso", gatorFileInfo.getProcessType());
                 JsonArray jsonArray = gson.toJsonTree(fileHeaders).getAsJsonArray();
                 jsonObj.add("headers", jsonArray);
                 String jsonProcess = executeStore(dbhelper, "app_fn_get_proceso2", gson.toJson(jsonObj));

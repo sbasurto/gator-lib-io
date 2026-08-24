@@ -34,6 +34,8 @@ public final class GatorAdmonTablasSelfCheck {
         generatorInfo.setUser("user");
         generatorInfo.setIdctrl("control");
         generatorInfo.setSessionId("session");
+        generatorInfo.setProcessType("entrada");
+        assert "entrada".equals(generatorInfo.getProcessType());
         assert GatorFileImportProcessor.requireFileInfo(generatorInfo, false) == generatorInfo;
 
         boolean rejected = false;
