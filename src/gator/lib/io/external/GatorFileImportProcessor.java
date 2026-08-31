@@ -55,7 +55,7 @@ public class GatorFileImportProcessor {
         private static final int IMPORT_BATCH_SIZE = 500;
         static final ThreadPoolExecutor IMPORT_POOL = new ThreadPoolExecutor(
                 0,
-                60,
+                100,
                 60,
                 TimeUnit.SECONDS,
                 new SynchronousQueue<>(),
@@ -668,17 +668,17 @@ public class GatorFileImportProcessor {
                 return gson.toJson(jsonObj);
         }
 
-        private List<Map<String, String>> procedureCalls(Object value) {
+        static List<Map<String, Object>> procedureCalls(Object value) {
                 if(value == null) return List.of();
                 require(value instanceof List<?>, "procedimientos debe ser un arreglo");
-                ArrayList<Map<String, String>> result = new ArrayList<>();
+                ArrayList<Map<String, Object>> result = new ArrayList<>();
                 for(Object item : (List<?>) value) {
                         require(item instanceof Map<?, ?>, "Cada procedimiento debe ser un objeto");
-                        HashMap<String, String> call = new HashMap<>();
+                        HashMap<String, Object> call = new HashMap<>();
                         for(Map.Entry<?, ?> entry : ((Map<?, ?>) item).entrySet()) {
                                 require(entry.getKey() instanceof String,
                                         "Las claves de procedimiento deben ser texto");
-                                call.put((String) entry.getKey(), optionalString(entry.getValue()));
+                                call.put((String) entry.getKey(), entry.getValue());
                         }
                         call.put("procedimiento",
                                 requireProcedure(call.get("procedimiento"), "procedimiento"));
@@ -687,14 +687,14 @@ public class GatorFileImportProcessor {
                 return result;
         }
 
-        private void executeProcedures(List<Map<String, String>> procedures) {
+        private void executeProcedures(List<Map<String, Object>> procedures) {
                 Gson gson = new Gson();
                 ArrayList<Callable<String>> parallel = new ArrayList<>();
                 for(int i = 0; i < procedures.size(); i++) {
-                        Map<String, String> call = procedures.get(i);
-                        String procedure = call.get("procedimiento");
+                        Map<String, Object> call = procedures.get(i);
+                        String procedure = requireProcedure(call.get("procedimiento"), "procedimiento");
                         String params = gson.toJson(call);
-                        if(i == 0 || "1".equals(call.getOrDefault("amIFirst", "0"))) {
+                        if(i == 0 || "1".equals(optionalString(call.get("amIFirst")))) {
                                 successfulResponse(executeGeneratedProcedure(procedure, params), procedure);
                         } else {
                                 parallel.add(() -> executeGeneratedProcedure(procedure, params));
@@ -798,7 +798,7 @@ public class GatorFileImportProcessor {
                                 status = executeStore(dbhelper, generador,
                                         generatorParams(parametros, limit, offset));
                                 responses = parseResponses(status, generador);
-                                List<Map<String, String>> procedimientos = procedureCalls(
+                                List<Map<String, Object>> procedimientos = procedureCalls(
                                         successfulResponse(status, generador).getResponse().get("procedimientos"));
                                 gappLog.addMessage("Procedimientos:" + procedimientos.size(), 1);
                                 if(procedimientos.isEmpty()) break;

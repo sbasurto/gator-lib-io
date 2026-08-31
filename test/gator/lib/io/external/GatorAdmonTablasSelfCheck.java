@@ -1,7 +1,9 @@
 package gator.lib.io.external;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -62,6 +64,14 @@ public final class GatorAdmonTablasSelfCheck {
         }
         assert rejected;
 
+        Map<String, Object> generated = new LinkedHashMap<>();
+        generated.put("procedimiento", "app_fn_admon_producto");
+        generated.put("acciones", List.of("alta"));
+        generated.put("campos", List.of(List.of("producto_sku", "cuenta_id")));
+        Map<String, Object> call = GatorFileImportProcessor.procedureCalls(List.of(generated)).get(0);
+        assert call.get("acciones") instanceof List<?>;
+        assert call.get("campos") instanceof List<?>;
+
         CountDownLatch ready = new CountDownLatch(2);
         List<java.util.concurrent.Callable<String>> concurrent = List.of(
                 () -> { ready.countDown(); assert ready.await(2, TimeUnit.SECONDS); return "a"; },
@@ -69,7 +79,7 @@ public final class GatorAdmonTablasSelfCheck {
         assert GatorFileImportProcessor.runParallel(concurrent).size() == 2;
         ThreadPoolExecutor importPool = GatorFileImportProcessor.IMPORT_POOL;
         assert importPool.getCorePoolSize() == 0;
-        assert importPool.getMaximumPoolSize() == 60;
+        assert importPool.getMaximumPoolSize() == 100;
         assert importPool.getKeepAliveTime(TimeUnit.SECONDS) == 60;
         assert importPool.getRejectedExecutionHandler() instanceof ThreadPoolExecutor.CallerRunsPolicy;
     }
