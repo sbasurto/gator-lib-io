@@ -52,7 +52,6 @@ import java.nio.file.Path;
  * @author <a href="mailto:sbasurto@soft-gator.com">Sergio Basurto Juárez</a>
  */
 public class GatorFileImportProcessor {
-        private static final int IMPORT_BATCH_SIZE = 500;
         static final ThreadPoolExecutor IMPORT_POOL = new ThreadPoolExecutor(
                 0,
                 100,
@@ -283,7 +282,8 @@ public class GatorFileImportProcessor {
                         gappLog.addMessage("Error at data:" + line, 2);
                         gappLog.addMessage(gappLogger.getStackTraceString(e), 2);  
                         gappLogger.logIt(gappLog);
-                        setErrorStatus("Error en línea " + (lineNumber + 1) + ": " + line);
+                        String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                        setErrorStatus("Error en línea " + (lineNumber + 1) + ": " + message);
                 }
         }
 
@@ -412,20 +412,19 @@ public class GatorFileImportProcessor {
                 tmpList.add("bodega_id");
                 tmpList.add("idctrl");
                 tmpList.add("sesion_id");
-                tmpList.add("usuario_id");                
-                ArrayList<Callable<String>> imports = new ArrayList<>();
+                tmpList.add("usuario_id");
                 for(int start = 0; start < referencias.size();) {
-                        final GatorAdmonTablas  admonTablas0 = new GatorAdmonTablas();
-                        admonTablas0.setDebugLevel("0");
-                        admonTablas0.setIdCtrl(gatorFileInfo.getIdctrl());
-                        admonTablas0.setUsuarioId(gatorFileInfo.getUser());
-                        admonTablas0.setSesionId(gatorFileInfo.getSeionId());
-                        int end = importBatchEnd(start, referencias.size());
+                        GatorAdmonTablas admonTablas = new GatorAdmonTablas();
+                        admonTablas.setDebugLevel("0");
+                        admonTablas.setIdCtrl(gatorFileInfo.getIdctrl());
+                        admonTablas.setUsuarioId(gatorFileInfo.getUser());
+                        admonTablas.setSesionId(gatorFileInfo.getSeionId());
+                        int end = importRequestEnd(start, referencias.size());
                         for(int i = start; i < end; i++) {
-                                admonTablas0.addTable(tabla);
-                                admonTablas0.addAccion(i == 0 ? "baja" : "alta");
-                                admonTablas0.addFields(tmpList);
-                                admonTablas0.addConditionFields(condiciones);
+                                admonTablas.addTable(tabla);
+                                admonTablas.addAccion(i == 0 ? "baja" : "alta");
+                                admonTablas.addFields(tmpList);
+                                admonTablas.addConditionFields(condiciones);
                                 ArrayList<String> value = new ArrayList<>(values.get(i));
                                 value.add(gatorFileInfo.getAccount());
                                 value.add(gatorFileInfo.getWarehouse());
@@ -447,29 +446,20 @@ public class GatorFileImportProcessor {
                                                         : "::fn::to_timestamp(::quote::" + tmp + "::quote::,::quote::" + formato + "::quote::)::fn::");
                                         }
                                 }
-                                admonTablas0.addValues(value);
-                                admonTablas0.addConditionValues(new ArrayList<>(Arrays.asList(
+                                admonTablas.addValues(value);
+                                admonTablas.addConditionValues(new ArrayList<>(Arrays.asList(
                                         "::in::" + referencias.get(i) + "::in::", "::noteq::1::noteq::")));
                         }
-                        String importParam = gson.toJson(admonTablas0.getObject());
-                        if(start == 0) {
-                                status = executeImport(importParam);
-                                successfulResponse(status, "app_fn_add_import");
-                        } else {
-                                imports.add(() -> executeImport(importParam));
-                        }
+                        status = executeImport(gson.toJson(admonTablas.getObject()));
+                        successfulResponse(status, "app_fn_add_import");
                         start = end;
-                }
-                for(String result : runParallel(imports)) {
-                        successfulResponse(result, "app_fn_add_import");
-                        status = result;
                 }
                 gappLog.addMessage("Importing done.", 0);
                 gappLogger.logIt(gappLog);                
 		}
 
-        static int importBatchEnd(int start, int rows) {
-                return Math.min(rows, start == 0 ? 1 : start + IMPORT_BATCH_SIZE);
+        static int importRequestEnd(int start, int rows) {
+                return start == 0 ? Math.min(1, rows) : rows;
         }
 
         private String executeImport(String param) {
