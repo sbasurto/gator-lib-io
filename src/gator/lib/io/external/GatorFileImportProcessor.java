@@ -440,7 +440,7 @@ public class GatorFileImportProcessor {
 		}
 
         static int importRequestEnd(int start, int rows) {
-                return rows;
+                return start == 0 ? Math.min(1, rows) : rows;
         }
 
         private String executeImport(String param) {
