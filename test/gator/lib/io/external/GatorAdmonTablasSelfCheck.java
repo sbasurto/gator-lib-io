@@ -4,9 +4,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import gator.lib.io.external.data.GatorFileInfo;
 
 public final class GatorAdmonTablasSelfCheck {
@@ -18,8 +15,7 @@ public final class GatorAdmonTablasSelfCheck {
         tables.addValues(new ArrayList<>(java.util.List.of("A-1")));
         assert "inventory".equals(tables.getObject().getAsJsonArray("tablas").get(0).getAsString());
         assert "alta".equals(tables.getObject().getAsJsonArray("acciones").get(0).getAsString());
-        assert GatorFileImportProcessor.importRequestEnd(0, 543) == 1;
-        assert GatorFileImportProcessor.importRequestEnd(1, 543) == 543;
+        assert GatorFileImportProcessor.importRequestEnd(0, 543) == 543;
         List<List<String>> csv = GatorFileImportProcessor.parseDelimited(
                 "id,description,notes\r\n1,\"a,b\",\"line 1\nline 2\"\r\n2,\"x\"\"y\",\r\n", ',');
         assert csv.size() == 3;
@@ -27,6 +23,10 @@ public final class GatorAdmonTablasSelfCheck {
         assert csv.get(1).get(2).equals("line 1\nline 2");
         assert csv.get(2).get(1).equals("x\"y");
         assert csv.get(2).get(2).isEmpty();
+        List<List<String>> leadingZero = GatorFileImportProcessor.parseDelimited(
+                "REFERENCIA,PRODUCTO,CANTIDAD\nR1,0219,1\nR2,0918,2\n", ',');
+        assert leadingZero.get(1).get(1).equals("0219");
+        assert leadingZero.get(2).get(1).equals("0918");
 
         GatorFileInfo generatorInfo = new GatorFileInfo();
         generatorInfo.setConfFile("db");
@@ -71,15 +71,5 @@ public final class GatorAdmonTablasSelfCheck {
         assert call.get("acciones") instanceof List<?>;
         assert call.get("campos") instanceof List<?>;
 
-        CountDownLatch ready = new CountDownLatch(2);
-        List<java.util.concurrent.Callable<String>> concurrent = List.of(
-                () -> { ready.countDown(); assert ready.await(2, TimeUnit.SECONDS); return "a"; },
-                () -> { ready.countDown(); assert ready.await(2, TimeUnit.SECONDS); return "b"; });
-        assert GatorFileImportProcessor.runParallel(concurrent).size() == 2;
-        ThreadPoolExecutor importPool = GatorFileImportProcessor.IMPORT_POOL;
-        assert importPool.getCorePoolSize() == 0;
-        assert importPool.getMaximumPoolSize() == 100;
-        assert importPool.getKeepAliveTime(TimeUnit.SECONDS) == 60;
-        assert importPool.getRejectedExecutionHandler() instanceof ThreadPoolExecutor.CallerRunsPolicy;
     }
 }

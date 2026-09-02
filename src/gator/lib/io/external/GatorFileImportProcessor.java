@@ -35,12 +35,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -52,19 +46,6 @@ import java.nio.file.Path;
  * @author <a href="mailto:sbasurto@soft-gator.com">Sergio Basurto Juárez</a>
  */
 public class GatorFileImportProcessor {
-        static final ThreadPoolExecutor IMPORT_POOL = new ThreadPoolExecutor(
-                0,
-                100,
-                60,
-                TimeUnit.SECONDS,
-                new SynchronousQueue<>(),
-                runnable -> {
-                        Thread thread = new Thread(runnable, "gator-file-import");
-                        thread.setDaemon(true);
-                        return thread;
-                },
-                new ThreadPoolExecutor.CallerRunsPolicy());
-
         /**
          * Separator.
          */
@@ -459,7 +440,7 @@ public class GatorFileImportProcessor {
 		}
 
         static int importRequestEnd(int start, int rows) {
-                return start == 0 ? Math.min(1, rows) : rows;
+                return rows;
         }
 
         private String executeImport(String param) {
@@ -679,19 +660,10 @@ public class GatorFileImportProcessor {
 
         private void executeProcedures(List<Map<String, Object>> procedures) {
                 Gson gson = new Gson();
-                ArrayList<Callable<String>> parallel = new ArrayList<>();
-                for(int i = 0; i < procedures.size(); i++) {
-                        Map<String, Object> call = procedures.get(i);
+                for(Map<String, Object> call : procedures) {
                         String procedure = requireProcedure(call.get("procedimiento"), "procedimiento");
                         String params = gson.toJson(call);
-                        if(i == 0 || "1".equals(optionalString(call.get("amIFirst")))) {
-                                successfulResponse(executeGeneratedProcedure(procedure, params), procedure);
-                        } else {
-                                parallel.add(() -> executeGeneratedProcedure(procedure, params));
-                        }
-                }
-                for(String result : runParallel(parallel)) {
-                        successfulResponse(result, "procedimiento generado");
+                        successfulResponse(executeGeneratedProcedure(procedure, params), procedure);
                 }
         }
 
@@ -706,17 +678,15 @@ public class GatorFileImportProcessor {
                 return helper.executeStore(statement);
         }
 
-        static List<String> runParallel(List<Callable<String>> tasks) {
-                if(tasks.isEmpty()) return List.of();
+        public void executeJob(String jobId, String leaseOwner) {
                 try {
-                        ArrayList<String> results = new ArrayList<>();
-                        for(Future<String> future : IMPORT_POOL.invokeAll(tasks)) results.add(future.get());
-                        return results;
-                } catch(InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new IllegalStateException("La ejecución concurrente fue interrumpida", e);
-                } catch(ExecutionException e) {
-                        throw new IllegalStateException("Falló una ejecución concurrente", e.getCause());
+                        JsonObject request = new JsonObject();
+                        request.addProperty("jobId", requireText(jobId, "jobId"));
+                        request.addProperty("leaseOwner", requireText(leaseOwner, "leaseOwner"));
+                        status = executeStore(dbhelper, "app_fn_execute_import_job", request.toString());
+                        successfulResponse(status, "app_fn_execute_import_job");
+                } catch(Exception e) {
+                        setErrorStatus(e.getMessage());
                 }
         }
         /**
