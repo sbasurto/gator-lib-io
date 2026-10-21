@@ -106,6 +106,7 @@ public class GatorFileImportProcessor {
          * Real column names.
          */
         private ArrayList<String> columnNames = new ArrayList<>();
+        private List<Integer> importedColumnIndexes = List.of();
         private final ArrayList<ArrayList<String>> values = new ArrayList<>();
         private Map<String, Object> parametros = new HashMap<>();
         private String parametrosStr = "";
@@ -244,13 +245,13 @@ public class GatorFileImportProcessor {
                                 line = record.toString();
                                 require(!(record.size() == 1 && record.get(0).isBlank()),
                                         "El registro " + (i + 1) + " está vacío");
-                                require(record.size() == columnNames.size(),
+                                require(record.size() == fileHeaders.size(),
                                         "El registro " + (i + 1) + " tiene " + record.size()
-                                        + " columnas; se esperaban " + columnNames.size());
+                                        + " columnas; se esperaban " + fileHeaders.size());
                                 procLineAsHash = new HashMap<>();
-                                tmpLine = new ArrayList<>(record);
+                                tmpLine = selectImportColumns(record, importedColumnIndexes);
                                 for(int j = 0; j < columnNames.size(); j++){
-                                        procLineAsHash.put(columnNames.get(j), record.get(j));
+                                        procLineAsHash.put(columnNames.get(j), tmpLine.get(j));
                                 }
                                 processLinesAsHashMap.add(procLineAsHash);
                                 values.add(tmpLine);
@@ -312,8 +313,8 @@ public class GatorFileImportProcessor {
                 require(columnNames.size() == fileHeaders.size(),
                         "La configuración devuelve " + columnNames.size()
                         + " columnas; el archivo contiene " + fileHeaders.size());
-                require(new HashSet<>(columnNames).size() == columnNames.size(),
-                        "La configuración contiene columnas duplicadas");
+                importedColumnIndexes = importColumnIndexes(columnNames);
+                columnNames = selectImportColumns(columnNames, importedColumnIndexes);
                 procedure = requireProcedure(response.getResponse().get("procedimiento"), "procedimiento");
                 generador = optionalProcedure(response.getResponse().get("generador"), "generador");
                 executor = optionalString(response.getResponse().get("ejecutor"));
@@ -438,6 +439,24 @@ public class GatorFileImportProcessor {
                 gappLog.addMessage("Importing done.", 0);
                 gappLogger.logIt(gappLog);                
 		}
+
+        static List<Integer> importColumnIndexes(List<String> columns) {
+                ArrayList<Integer> indexes = new ArrayList<>();
+                HashSet<String> names = new HashSet<>();
+                for(int i = 0; i < columns.size(); i++) {
+                        String column = columns.get(i);
+                        if("{none}".equals(column) || "none".equals(column)) continue;
+                        require(names.add(column), "La configuración contiene columnas duplicadas");
+                        indexes.add(i);
+                }
+                return indexes;
+        }
+
+        static ArrayList<String> selectImportColumns(List<String> values, List<Integer> indexes) {
+                ArrayList<String> selected = new ArrayList<>();
+                for(int index : indexes) selected.add(values.get(index));
+                return selected;
+        }
 
         static int importRequestEnd(int start, int rows) {
                 return start == 0 ? Math.min(1, rows) : rows;

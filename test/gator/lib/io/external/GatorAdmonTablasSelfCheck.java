@@ -29,6 +29,26 @@ public final class GatorAdmonTablasSelfCheck {
         assert leadingZero.get(1).get(1).equals("0219");
         assert leadingZero.get(2).get(1).equals("0918");
 
+        List<String> configuredColumns = List.of("{none}", "sku", "{none}", "fecha", "none");
+        List<Integer> importedIndexes = GatorFileImportProcessor.importColumnIndexes(configuredColumns);
+        assert GatorFileImportProcessor.selectImportColumns(configuredColumns, importedIndexes)
+                .equals(List.of("sku", "fecha"));
+        List<List<String>> ignoredColumns = GatorFileImportProcessor.parseDelimited(
+                "EXTRA,SKU,NOTAS,FECHA,ANTERIOR\nlleno,0219,,2026-10-20,otro\n,0918,lleno,2026-10-21,\n", ',');
+        assert GatorFileImportProcessor.selectImportColumns(ignoredColumns.get(1), importedIndexes)
+                .equals(List.of("0219", "2026-10-20"));
+        assert GatorFileImportProcessor.selectImportColumns(ignoredColumns.get(2), importedIndexes)
+                .equals(List.of("0918", "2026-10-21"));
+        assert GatorFileImportProcessor.importColumnIndexes(List.of("sku", "fecha"))
+                .equals(List.of(0, 1));
+        boolean duplicateRejected = false;
+        try {
+            GatorFileImportProcessor.importColumnIndexes(List.of("{none}", "sku", "none", "sku"));
+        } catch (IllegalArgumentException expected) {
+            duplicateRejected = true;
+        }
+        assert duplicateRejected : "Las columnas destino reales duplicadas deben rechazarse";
+
         GatorFileInfo generatorInfo = new GatorFileInfo();
         generatorInfo.setConfFile("db");
         generatorInfo.setAccount("1");
